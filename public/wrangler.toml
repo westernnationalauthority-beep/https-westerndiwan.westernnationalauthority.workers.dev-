@@ -3,4 +3,4 @@ main = "index.js"
 compatibility_date = "2026-06-15"
 
 [vars]
-DATABASE_URL = "ضع_رابط_قاعدة_بيانات_neon_الخاص_بك_هنا"
+DATABASE_URL = "postgresql://neondb_owner:npg_YUnvxeQr6K8k@ep-sparkling-glitter-aprzy5tf-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
