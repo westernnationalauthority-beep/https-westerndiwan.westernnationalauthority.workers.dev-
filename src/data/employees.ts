@@ -37,7 +37,7 @@ export interface Employee {
 
 // يمكن تغيير الرابط من ملف البيئة VITE_API_URL بدون تعديل الكود.
 const viteEnv = import.meta as unknown as { env?: Record<string, string | undefined> };
-export const API_URL = viteEnv.env?.VITE_API_URL || "https://script.google.com/macros/s/AKfycbz84p_VM_kkQ5oLVF5HljdJovCFy-winENuYRVEpBGqwfMFgzEXyS9JSH1S75zYw88SYg/exec";
+export const API_URL = viteEnv.env?.VITE_API_URL || "https://script.google.com/macros/s/AKfycbz0gUfN3Vgl-_MVI0rIogXoA5RipkA2oRWIUvusSiC5riHnHFxamMLEDgTgPPpQBm9xJw/exec";
 export const INITIAL_CODE = "NACC2026";
 
 /* ============================================================
