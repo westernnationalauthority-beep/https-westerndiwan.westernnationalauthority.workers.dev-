@@ -2,91 +2,115 @@ import { neon } from '@neondatabase/serverless';
 
 export default {
   async fetch(request, env, ctx) {
-    const sql = neon(env.DATABASE_URL);
     const url = new URL(request.url);
 
-    if (url.pathname === "/") {
-      try {
-        // جلب إصدار قاعدة البيانات
-        const [result] = await sql`SELECT version()`;
-        const version = result?.version || 'No version found';
-        
-        // صفحة الويب المصممة بـ HTML و CSS
-        const html = `
-        <!DOCTYPE html>
-        <html lang="ar" dir="rtl">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>لوحة التحكم | ديوان الويب</title>
-            <style>
-                body {
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    background-color: #f4f7f6;
-                    color: #333;
-                    margin: 0;
-                    padding: 0;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                }
-                .card {
-                    background: white;
-                    padding: 30px;
-                    border-radius: 12px;
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-                    text-align: center;
-                    max-width: 500px;
-                    width: 90%;
-                }
-                h1 { color: #2c3e50; font-size: 24px; margin-bottom: 10px; }
-                p { color: #7f8c8d; font-size: 16px; line-height: 1.6; }
-                .status {
-                    display: inline-block;
-                    padding: 8px 15px;
-                    background-color: #2ecc71;
-                    color: white;
-                    border-radius: 20px;
-                    font-weight: bold;
-                    margin-top: 15px;
-                    font-size: 14px;
-                }
-                .db-info {
-                    background: #ecf0f1;
-                    padding: 12px;
-                    border-radius: 6px;
-                    font-family: monospace;
-                    font-size: 12px;
-                    text-align: left;
-                    direction: ltr;
-                    margin-top: 20px;
-                    word-break: break-all;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>مرحباً بك في موقعك الجديد! 🚀</h1>
-                <p>تم ربط الكود المستضاف على <strong>Cloudflare Workers</strong> بنجاح تام، وعرض هذه الواجهة التفاعلية الحية.</p>
-                <span class="status">✓ قاعدة البيانات متصلة</span>
-                <div class="db-info">
-                    <strong>Database Version:</strong><br>${version}
-                </div>
-            </div>
-        </body>
-        </html>
-        `;
+    // 1. التعامل مع عملية إرسال بيانات الدخول (POST)
+    if (request.method === "POST") {
+      const formData = await request.formData();
+      const username = formData.get("username");
+      const password = formData.get("password");
 
-        return new Response(html, {
-          headers: { "content-type": "text/html; charset=UTF-8" },
-        });
-
-      } catch (error) {
-        return new Response("خطأ في الاتصال بقاعدة البيانات", { status: 500 });
+      // هنا يمكنك مستقبلاً التحقق من البيانات عبر قاعدة بيانات Neon
+      if (username === "admin" && password === "123456") {
+        return new Response(`
+          <div style="text-align:center; font-family:sans-serif; margin-top:50px; direction:rtl;">
+            <h1 style="color:#2ecc71;">تم تسجيل الدخول بنجاح! 🎉</h1>
+            <p>مرحباً بك يا ${username} في لوحة التحكم الخاص بك.</p>
+            <a href="/">العودة للخلف</a>
+          </div>
+        `, { headers: { "content-type": "text/html; charset=UTF-8" } });
+      } else {
+        return new Response(`
+          <div style="text-align:center; font-family:sans-serif; margin-top:50px; direction:rtl;">
+            <h1 style="color:#e74c3c;">خطأ في تسجيل الدخول! ❌</h1>
+            <p>اسم المستخدم أو كلمة المرور غير صحيحة.</p>
+            <a href="/">حاول مجدداً</a>
+          </div>
+        `, { headers: { "content-type": "text/html; charset=UTF-8" } });
       }
     }
 
-    return new Response("الصفحة غير موجودة", { status: 404 });
+    // 2. عرض شاشة الدخول الرئيسية (GET)
+    const loginHtml = `
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>تسجيل الدخول | ديوان الويب</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: linear-gradient(135deg, #74ebd5, #9face6);
+                margin: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+            }
+            .login-container {
+                background: white;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+                width: 100%;
+                max-width: 400px;
+                text-align: center;
+            }
+            h2 { color: #2c3e50; margin-bottom: 25px; font-size: 26px; }
+            .input-group {
+                text-align: right;
+                margin-bottom: 20px;
+            }
+            label { display: block; margin-bottom: 8px; color: #555; font-size: 14px; }
+            input {
+                width: 100%;
+                padding: 12px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                box-sizing: border-box;
+                font-size: 16px;
+                transition: 0.3s;
+            }
+            input:focus { border-color: #74ebd5; outline: none; }
+            .btn {
+                width: 100%;
+                padding: 12px;
+                background: #4a00e0;
+                background: linear-gradient(to right, #8e2de2, #4a00e0);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 18px;
+                font-weight: bold;
+                cursor: pointer;
+                transition: 0.3s;
+                margin-top: 10px;
+            }
+            .btn:hover { opacity: 0.9; }
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h2>تسجيل الدخول</h2>
+            <form method="POST" action="/">
+                <div class="input-group">
+                    <label for="username">اسم المستخدم أو البريد الإلكتروني</label>
+                    <input type="text" id="username" name="username" required placeholder="أدخل اسم المستخدم">
+                </div>
+                <div class="input-group">
+                    <label for="password">كلمة المرور</label>
+                    <input type="password" id="password" name="password" required placeholder="أدخل كلمة المرور">
+                </div>
+                <button type="submit" class="btn">دخول</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    `;
+
+    return new Response(loginHtml, {
+      headers: { "content-type": "text/html; charset=UTF-8" },
+    });
   },
 };
