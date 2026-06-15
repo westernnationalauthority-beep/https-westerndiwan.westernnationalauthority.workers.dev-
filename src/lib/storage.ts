@@ -1,0 +1,721 @@
+// ============================================================
+// storage.ts - النسخة الكاملة المصححة
+// ============================================================
+
+export type { DeleteRequest, Employee } from "../data/employees";
+import type { Employee } from "../data/employees";
+
+/* ============== PERMISSIONS ============== */
+export interface Permissions {
+  canView: boolean;
+  canEdit: boolean;
+  canPrint: boolean;
+  canExport: boolean;
+  canManageUsers: boolean;
+  canViewLogs: boolean;
+  canAddFields: boolean;
+  canRequestDelete: boolean;
+  canApproveDelete: boolean;
+  canViewArchive: boolean;
+  canRestoreArchive: boolean;
+}
+
+export const ADMIN_PERMISSIONS: Permissions = {
+  canView: true, canEdit: true, canPrint: true, canExport: true,
+  canManageUsers: true, canViewLogs: true, canAddFields: true,
+  canRequestDelete: true, canApproveDelete: true, canViewArchive: true, canRestoreArchive: true,
+};
+
+export const DEFAULT_EMPLOYEE_PERMISSIONS: Permissions = {
+  canView: true, canEdit: false, canPrint: true, canExport: false,
+  canManageUsers: false, canViewLogs: false, canAddFields: false,
+  canRequestDelete: false, canApproveDelete: false, canViewArchive: false, canRestoreArchive: false,
+};
+
+export const PERMISSION_LABELS: Record<keyof Permissions, string> = {
+  canView: "عرض بيانات الموظفين",
+  canEdit: "تعديل وحفظ البيانات",
+  canPrint: "طباعة النماذج",
+  canExport: "تصدير CSV",
+  canManageUsers: "إدارة المستخدمين",
+  canViewLogs: "عرض سجل النشاطات",
+  canAddFields: "إضافة حقول مخصصة",
+  canRequestDelete: "طلب حذف موظف",
+  canApproveDelete: "الموافقة على طلبات الحذف",
+  canViewArchive: "عرض أرشيف الموظفين",
+  canRestoreArchive: "استعادة موظف من الأرشيف",
+};
+
+/* ============== USER ============== */
+export interface User {
+  id: string;
+  username: string;
+  password: string; // الآن: JSON string من PasswordHash
+  fullName: string;
+  role: "admin" | "employee";
+  permissions: Permissions;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string;
+  allowedDepartments?: string[];
+  passwordVersion?: "pbkdf2" | "plaintext"; // للإشارة إلى نوع التخزين
+}
+
+/* ============== ACTIVITY LOG ============== */
+export interface ActivityLog {
+  id: string;
+  userId: string;
+  username: string;
+  fullName: string;
+  role: "admin" | "employee" | "public";
+  action: ActionType;
+  details: string;
+  timestamp: string;
+}
+
+export type ActionType =
+  | "login" | "logout"
+  | "view_employee" | "print_employee" | "print_summary" | "print_all"
+  | "export_csv" | "search" | "filter" | "refresh_data"
+  | "edit_employee" | "save_employee"
+  | "create_user" | "update_user" | "delete_user" | "change_password" | "toggle_user" | "update_permissions"
+  | "add_field" | "delete_field"
+  | "public_search" | "share_employee"
+  | "clear_logs" | "restore_archive" | "clean_archive"
+  | "approve_delete" | "reject_delete" | "request_delete"
+  | "add_code" | "delete_code" | "update_code"
+  | "print_alerts" | "delete_archive" | "delete_archive_local" | "delete_archive_failed";
+
+export interface Session {
+  userId: string;
+  username: string;
+  fullName: string;
+  role: "admin" | "employee";
+  permissions: Permissions;
+  loginTime: string;
+  allowedDepartments?: string[];
+}
+
+/* ============== EMPLOYEE EDIT ============== */
+export interface EmployeeEdit {
+  nationalNumber: string;
+  overrides: Record<string, string>;
+  editedBy: string;
+  editedByName: string;
+  editedAt: string;
+}
+
+/* ============== CUSTOM FIELD ============== */
+export interface CustomField {
+  id: string;
+  key: string;
+  label: string;
+  isRequired: boolean;
+  createdBy: string;
+  createdAt: string;
+  source?: string;
+}
+
+/* ============== KEYS ============== */
+const KEYS = {
+  USERS:           "nacc_users_v2",
+  LOGS:            "nacc_activity_logs_v2",
+  SESSION:         "nacc_current_session_v2",
+  EDITS:           "nacc_employee_edits_v1",
+  CUSTOM_FIELDS:   "nacc_custom_fields_v1",
+  REQUIRED_CONFIG: "required_fields_config",
+  ARCHIVED:        "nacc_archived_employees",
+  FIELD_ALIASES:   "nacc_field_aliases_v1", // ✅ جديد
+};
+
+/* ============== DEFAULT ADMIN ============== */
+// كلمات المرور الافتراضية (ستُشفّر تلقائياً عند أول استخدام)
+const DEFAULT_ADMIN_PASSWORD_PLAIN = "NACC@2026";
+
+const DEFAULT_ADMIN: User = {
+  id: "admin_default",
+  username: "admin",
+  password: DEFAULT_ADMIN_PASSWORD_PLAIN, // سيُشفَّر تلقائياً عند أول دخول
+  fullName: "المدير العام",
+  role: "admin",
+  permissions: ADMIN_PERMISSIONS,
+  isActive: true,
+  createdAt: new Date().toISOString(),
+  createdBy: "system",
+  allowedDepartments: [],
+  passwordVersion: "plaintext",
+};
+
+/* ──────────────────────────────────────────────
+ * ترقية تلقائية للمستخدمين القدامى (plaintext → pbkdf2)
+ * ────────────────────────────────────────────── */
+export async function upgradeUserPasswords(): Promise<void> {
+  const users = getUsers();
+  let changed = false;
+  for (const u of users) {
+    if (!isPasswordHashed(u.password)) {
+      try {
+        const hash = await hashPassword(u.password);
+        u.password = JSON.stringify(hash);
+        u.passwordVersion = "pbkdf2";
+        changed = true;
+      } catch (e) {
+        console.error(`فشل تشفير كلمة مرور ${u.username}:`, e);
+      }
+    }
+  }
+  if (changed) {
+    saveUsers(users);
+    console.log("✅ تم ترقية كلمات المرور إلى PBKDF2");
+  }
+}
+
+function normalizePermissions(role: "admin" | "employee", permissions?: Partial<Permissions>): Permissions {
+  const base = role === "admin" ? ADMIN_PERMISSIONS : DEFAULT_EMPLOYEE_PERMISSIONS;
+  return { ...base, ...(permissions || {}) };
+}
+
+/* ============================================================
+   USERS
+   ============================================================ */
+export function getUsers(): User[] {
+  try {
+    const raw = localStorage.getItem(KEYS.USERS);
+    if (!raw) return initializeUsers();
+    const users: User[] = JSON.parse(raw);
+    let changed = false;
+    users.forEach((u) => {
+      const normalized = normalizePermissions(u.role, u.permissions);
+      if (JSON.stringify(normalized) !== JSON.stringify(u.permissions)) {
+        u.permissions = normalized;
+        changed = true;
+      }
+      if (u.allowedDepartments === undefined) {
+        u.allowedDepartments = [];
+        changed = true;
+      }
+    });
+    if (changed) saveUsers(users);
+    if (!users.some((u) => u.role === "admin")) return initializeUsers();
+    return users;
+  } catch {
+    return initializeUsers();
+  }
+}
+
+function initializeUsers(): User[] {
+  const users = [DEFAULT_ADMIN];
+  localStorage.setItem(KEYS.USERS, JSON.stringify(users));
+  return users;
+}
+
+export function saveUsers(users: User[]): void {
+  localStorage.setItem(KEYS.USERS, JSON.stringify(users));
+}
+
+import { hashPassword, verifyPassword, isPasswordHashed } from "./crypto";
+
+export async function findUser(username: string, password: string): Promise<User | null> {
+  const users = getUsers();
+  const user = users.find(
+    (u) => u.username.toLowerCase() === username.toLowerCase().trim()
+      && u.isActive
+  );
+  if (!user) return null;
+
+  // تحقق من التشفير
+  if (isPasswordHashed(user.password)) {
+    const hash = JSON.parse(user.password);
+    const valid = await verifyPassword(password, hash);
+    return valid ? user : null;
+  }
+
+  // كلمات مرور قديمة (نص صريح) - تحقق مباشر + ترقية
+  if (user.password === password) {
+    // ترقية تلقائية للتشفير
+    const hash = await hashPassword(password);
+    user.password = JSON.stringify(hash);
+    user.passwordVersion = "pbkdf2";
+    saveUsers(users);
+    return user;
+  }
+
+  return null;
+}
+
+export async function createUser(data: Omit<User, "id" | "createdAt">, createdBy: string): Promise<{ ok: boolean; error?: string }> {
+  const users = getUsers();
+  if (users.some((u) => u.username.toLowerCase() === data.username.toLowerCase().trim()))
+    return { ok: false, error: "اسم المستخدم موجود بالفعل" };
+  if (!data.username.trim() || data.username.trim().length < 3)
+    return { ok: false, error: "اسم المستخدم يجب أن يكون 3 أحرف على الأقل" };
+  if (!data.password || data.password.length < 4)
+    return { ok: false, error: "كلمة المرور يجب أن تكون 4 أحرف على الأقل" };
+  if (!data.fullName.trim())
+    return { ok: false, error: "الاسم الكامل مطلوب" };
+
+  // تشفير كلمة المرور
+  const hash = await hashPassword(data.password);
+  users.push({
+    ...data,
+    password: JSON.stringify(hash),
+    passwordVersion: "pbkdf2",
+    allowedDepartments: data.allowedDepartments || [],
+    id: "u_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+    createdAt: new Date().toISOString(),
+    createdBy,
+  });
+  saveUsers(users);
+  return { ok: true };
+}
+
+export function updateUser(id: string, updates: Partial<Omit<User, "id" | "createdAt" | "createdBy">>): { ok: boolean; error?: string } {
+  const users = getUsers();
+  const idx = users.findIndex((u) => u.id === id);
+  if (idx === -1) return { ok: false, error: "المستخدم غير موجود" };
+  if (updates.username && updates.username !== users[idx].username) {
+    if (users.some((u) => u.id !== id && u.username.toLowerCase() === updates.username!.toLowerCase().trim()))
+      return { ok: false, error: "اسم المستخدم موجود بالفعل" };
+  }
+  users[idx] = { ...users[idx], ...updates };
+  if (updates.role === "admin") {
+    users[idx].permissions = ADMIN_PERMISSIONS;
+    users[idx].allowedDepartments = [];
+  }
+  saveUsers(users);
+  return { ok: true };
+}
+
+export function deleteUser(id: string): { ok: boolean; error?: string } {
+  const users = getUsers();
+  const user = users.find((u) => u.id === id);
+  if (!user) return { ok: false, error: "المستخدم غير موجود" };
+  if (user.role === "admin") {
+    const adminCount = users.filter((u) => u.role === "admin" && u.isActive).length;
+    if (adminCount <= 1) return { ok: false, error: "لا يمكن حذف آخر مدير في النظام" };
+  }
+  saveUsers(users.filter((u) => u.id !== id));
+  return { ok: true };
+}
+
+export async function changePassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
+  const users = getUsers();
+  const user = users.find((u) => u.id === id);
+  if (!user) return { ok: false, error: "المستخدم غير موجود" };
+
+  // التحقق من كلمة المرور القديمة
+  if (isPasswordHashed(user.password)) {
+    const hash = JSON.parse(user.password);
+    const valid = await verifyPassword(oldPassword, hash);
+    if (!valid) return { ok: false, error: "كلمة المرور الحالية غير صحيحة" };
+  } else {
+    if (user.password !== oldPassword) return { ok: false, error: "كلمة المرور الحالية غير صحيحة" };
+  }
+
+  if (!newPassword || newPassword.length < 4) return { ok: false, error: "كلمة المرور الجديدة يجب أن تكون 4 أحرف على الأقل" };
+
+  // تشفير كلمة المرور الجديدة
+  const hash = await hashPassword(newPassword);
+  user.password = JSON.stringify(hash);
+  user.passwordVersion = "pbkdf2";
+  saveUsers(users);
+  return { ok: true };
+}
+
+export function updateUserDepartments(id: string, departments: string[]): { ok: boolean; error?: string } {
+  return updateUser(id, { allowedDepartments: departments });
+}
+
+export function isUserRestricted(user: User | Session): boolean {
+  return !!(user.allowedDepartments && user.allowedDepartments.length > 0);
+}
+
+export function filterByUserDepartments<T extends Employee>(employees: T[], session: Session): T[] {
+  if (!isUserRestricted(session)) return employees;
+  const allowed = session.allowedDepartments || [];
+  return employees.filter((e) => allowed.includes(e.department || ""));
+}
+
+/* ============================================================
+   SESSION
+   ============================================================ */
+export function getSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(KEYS.SESSION);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as Session;
+    s.permissions = normalizePermissions(s.role, s.permissions);
+    if (s.allowedDepartments === undefined) s.allowedDepartments = [];
+    return s;
+  } catch { return null; }
+}
+
+export function setSession(s: Session | null): void {
+  if (s) localStorage.setItem(KEYS.SESSION, JSON.stringify(s));
+  else localStorage.removeItem(KEYS.SESSION);
+}
+
+/* ============================================================
+   LOGS
+   ============================================================ */
+export function getLogs(): ActivityLog[] {
+  try {
+    const raw = localStorage.getItem(KEYS.LOGS);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function addLog(
+  session: { userId: string; username: string; fullName: string; role: "admin" | "employee" | "public" },
+  action: ActionType,
+  details: string
+): void {
+  try {
+    const logs = getLogs();
+    logs.push({
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+      userId: session.userId,
+      username: session.username,
+      fullName: session.fullName,
+      role: session.role,
+      action,
+      details,
+      timestamp: new Date().toISOString(),
+    });
+    if (logs.length > 500) logs.splice(0, logs.length - 500);
+    localStorage.setItem(KEYS.LOGS, JSON.stringify(logs));
+  } catch { }
+}
+
+export function clearLogs(): void {
+  localStorage.removeItem(KEYS.LOGS);
+}
+
+/* ============================================================
+   USER STATS
+   ============================================================ */
+export function getUserStats(userId: string): { totalLogins: number; totalOperations: number } {
+  const logs = getLogs();
+  const userLogs = logs.filter((l) => l.userId === userId);
+  return {
+    totalLogins: userLogs.filter((l) => l.action === "login").length,
+    totalOperations: userLogs.filter((l) => l.action !== "login" && l.action !== "logout").length,
+  };
+}
+
+/* ============================================================
+   EMPLOYEE EDITS
+   ============================================================ */
+export function getEmployeeEdits(): EmployeeEdit[] {
+  try {
+    const raw = localStorage.getItem(KEYS.EDITS);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function saveEmployeeEdit(nationalNumber: string, overrides: Record<string, string>, session: Session): void {
+  try {
+    const edits = getEmployeeEdits();
+    const idx = edits.findIndex((e) => e.nationalNumber === nationalNumber);
+    const edit: EmployeeEdit = {
+      nationalNumber,
+      overrides,
+      editedBy: session.userId,
+      editedByName: session.fullName,
+      editedAt: new Date().toISOString(),
+    };
+    if (idx >= 0) edits[idx] = edit;
+    else edits.push(edit);
+    localStorage.setItem(KEYS.EDITS, JSON.stringify(edits));
+  } catch { }
+}
+
+export function mergeAllEmployees(employees: Employee[] | null | undefined): (Employee & Record<string, string>)[] {
+  if (!employees || !Array.isArray(employees)) return [];
+  const edits = getEmployeeEdits();
+  return employees.map((emp) => {
+    if (!emp) return emp as Employee & Record<string, string>;
+    const edit = edits.find((e) => e.nationalNumber === (emp.nationalNumber || ""));
+    if (!edit) return emp as Employee & Record<string, string>;
+    return { ...emp, ...edit.overrides } as Employee & Record<string, string>;
+  }).filter((emp): emp is (Employee & Record<string, string>) => !!emp);
+}
+
+export function findEmployeeByNationalNumber(employees: Employee[], nn: string): (Employee & Record<string, string>) | null {
+  if (!employees || !Array.isArray(employees)) return null;
+  if (!nn || typeof nn !== "string") return null;
+  const cleaned = nn.replace(/[^\d]/g, "").trim();
+  if (!cleaned) return null;
+  const merged = mergeAllEmployees(employees);
+  return merged.find((e) => (e.nationalNumber || "").replace(/[^\d]/g, "").trim() === cleaned) || null;
+}
+
+/* ============================================================
+   CUSTOM FIELDS
+   ============================================================ */
+export function getCustomFields(): CustomField[] {
+  try {
+    const raw = localStorage.getItem(KEYS.CUSTOM_FIELDS);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function addCustomField(label: string, createdBy: string, isRequired = false): { ok: boolean; error?: string; field?: CustomField } {
+  const fields = getCustomFields();
+  if (fields.some((f) => f.label === label)) return { ok: false, error: "الحقل موجود بالفعل" };
+  // مفتاح فريد مكوّن من timestamp + random لضمان عدم التكرار
+  const uniqueId = Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+  const field: CustomField = {
+    id: "cf_" + uniqueId,
+    key: "field_custom_" + uniqueId,
+    label,
+    isRequired,
+    createdBy,
+    createdAt: new Date().toISOString(),
+    source: createdBy === "sheet-sync" ? "sheet-sync" : "manual",
+  };
+  fields.push(field);
+  localStorage.setItem(KEYS.CUSTOM_FIELDS, JSON.stringify(fields));
+  return { ok: true, field };
+}
+
+export function deleteCustomField(id: string): void {
+  const fields = getCustomFields().filter((f) => f.id !== id);
+  localStorage.setItem(KEYS.CUSTOM_FIELDS, JSON.stringify(fields));
+  // حذف الحقل من إعدادات النواقص أيضاً
+  try {
+    const saved = localStorage.getItem(KEYS.REQUIRED_CONFIG);
+    if (saved) {
+      const config = JSON.parse(saved) as Record<string, boolean>;
+      const field = getCustomFields().find((f) => f.id === id);
+      if (field) {
+        delete config[field.key];
+        delete config[field.label];
+        localStorage.setItem(KEYS.REQUIRED_CONFIG, JSON.stringify(config));
+      }
+    }
+  } catch {}
+}
+
+export function renameCustomField(id: string, newLabel: string): { ok: boolean; error?: string } {
+  const trimmed = newLabel.trim();
+  if (!trimmed) return { ok: false, error: "الاسم لا يمكن أن يكون فارغاً" };
+  const fields = getCustomFields();
+  if (fields.some((f) => f.id !== id && f.label === trimmed)) {
+    return { ok: false, error: "يوجد حقل آخر بنفس الاسم" };
+  }
+  const idx = fields.findIndex((f) => f.id === id);
+  if (idx === -1) return { ok: false, error: "الحقل غير موجود" };
+  fields[idx].label = trimmed;
+  localStorage.setItem(KEYS.CUSTOM_FIELDS, JSON.stringify(fields));
+  return { ok: true };
+}
+
+export function toggleFieldRequired(id: string): void {
+  const fields = getCustomFields();
+  const f = fields.find((f) => f.id === id);
+  if (f) {
+    f.isRequired = !f.isRequired;
+    localStorage.setItem(KEYS.CUSTOM_FIELDS, JSON.stringify(fields));
+  }
+}
+
+// ✅ مسميات الأعمدة البديلة
+export function getFieldAliases(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(KEYS.FIELD_ALIASES) || "{}"); } catch { return {}; }
+}
+
+export function setFieldAlias(key: string, label: string): void {
+  const aliases = getFieldAliases();
+  aliases[key] = label;
+  localStorage.setItem(KEYS.FIELD_ALIASES, JSON.stringify(aliases));
+}
+
+/* ============================================================
+   REQUIRED FIELDS CONFIG
+   ============================================================ */
+// ✅ الحقول المطلوبة - مطابقة لـ requiredFields في Apps Script (12 حقل)
+// Apps Script تتحقق من: الرقم الوظيفي، الاسم، المصرف، IBAN، الدرجة، المؤهل،
+// التخصص، رقم القرار، تاريخ المباشرة، الهاتف، الإدارة، القسم
+// ⬜ الحقول الأخرى اختيارية - لن تعتبر الموظف "ناقص" إذا كانت فارغة
+const DEFAULT_REQUIRED_CONFIG: Record<string, boolean> = {
+  // ✅ الحقول الأساسية (مطلوبة)
+  fullName: true,            // "الاســـم ربــاعـــي"
+  nationalNumber: true,      // "الرقم الوطني" - ✅ مطلوب الآن
+  jobNumber: true,           // "الرقم الوظيفي"
+  bankName: true,            // "أســـــم المصــــرف"
+  iban: true,                // "رقم الحساب الدولي / الايبان"
+  jobGrade: true,            // "الدرجة الوظيفية الحالية"
+  qualification: true,       // "المؤهل العلمي  "
+  specialization: true,      // "التخصص"
+  appointmentDecision: true, // "رقم قرار التعيين او قرار النقل / السنة"
+  startDate: true,           // "تاريخ مباشرة العمل"
+  phone: true,               // "رقم الهاتف"
+  department: true,          // "الإدارة"
+  section: true,             // "القسم"
+  // ⬜ اختيارية
+  grade: false,
+  qualificationOrigin: false,
+  promotionDate: false,
+  gender: false,
+  receivesPension: false,
+  p: false,
+  status: false,
+  dataComplete: false,
+  jobStatus: false,
+  employmentType: false,
+  notes: false,
+  requiredAction: false,
+  branch: false,
+  timestamp: false,
+};
+
+export function getRequiredFieldsConfig(): Record<string, boolean> {
+  try {
+    const saved = localStorage.getItem(KEYS.REQUIRED_CONFIG);
+    const config = { ...DEFAULT_REQUIRED_CONFIG };
+    if (saved) {
+      const savedConfig = JSON.parse(saved) as Record<string, boolean>;
+      Object.assign(config, savedConfig);
+    }
+    const customFields = getCustomFields();
+    customFields.forEach((f) => {
+      const saved_val = localStorage.getItem(KEYS.REQUIRED_CONFIG);
+      if (saved_val) {
+        const savedConfig = JSON.parse(saved_val) as Record<string, boolean>;
+        if (savedConfig[f.key] !== undefined) {
+          config[f.key] = savedConfig[f.key];
+        } else {
+          config[f.key] = f.isRequired;
+        }
+      } else {
+        config[f.key] = f.isRequired;
+      }
+    });
+    return config;
+  } catch (e) {
+    console.error("[v0] getRequiredFieldsConfig error:", e);
+    return { ...DEFAULT_REQUIRED_CONFIG };
+  }
+}
+
+export function setRequiredFieldsConfig(config: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(KEYS.REQUIRED_CONFIG, JSON.stringify(config));
+    const fields = getCustomFields();
+    let changed = false;
+    fields.forEach((f) => {
+      if (config[f.key] !== undefined && f.isRequired !== config[f.key]) {
+        f.isRequired = config[f.key];
+        changed = true;
+      }
+    });
+    if (changed) {
+      localStorage.setItem(KEYS.CUSTOM_FIELDS, JSON.stringify(fields));
+    }
+  } catch (e) {
+    console.error("[v0] setRequiredFieldsConfig error:", e);
+  }
+}
+
+/* ============================================================
+   ARCHIVED EMPLOYEES
+   ============================================================ */
+export function getArchivedEmployees(): Record<string, string>[] {
+  try {
+    const raw = localStorage.getItem(KEYS.ARCHIVED);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function setArchivedEmployees(data: Record<string, string>[]): void {
+  try {
+    localStorage.setItem(KEYS.ARCHIVED, JSON.stringify(data));
+  } catch { }
+}
+
+/* ============================================================
+   ADVANCED CODES
+   ============================================================ */
+export interface CodeConfig {
+  id: string;
+  codeValue: string;
+  codeType: "initial" | "departmental" | "custom";
+  department?: string;
+  validFrom: string;
+  validUntil?: string;
+  durationMonths?: number;
+  maxUsages?: number;
+  currentUsages: number;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string;
+  notes?: string;
+}
+
+const CODE_STORAGE_KEY = "advanced_codes_config";
+
+export function getAllCodeConfigs(): CodeConfig[] {
+  try {
+    const data = localStorage.getItem(CODE_STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch { return []; }
+}
+
+export function addCodeConfig(config: Omit<CodeConfig, "id" | "currentUsages" | "createdAt">): CodeConfig {
+  const newCode: CodeConfig = {
+    ...config,
+    id: `CODE-${Date.now()}`,
+    currentUsages: 0,
+    createdAt: new Date().toISOString(),
+  };
+  const all = getAllCodeConfigs();
+  all.push(newCode);
+  localStorage.setItem(CODE_STORAGE_KEY, JSON.stringify(all));
+  return newCode;
+}
+
+export function updateCodeConfig(id: string, updates: Partial<CodeConfig>): boolean {
+  const all = getAllCodeConfigs();
+  const idx = all.findIndex((c) => c.id === id);
+  if (idx === -1) return false;
+  all[idx] = { ...all[idx], ...updates };
+  localStorage.setItem(CODE_STORAGE_KEY, JSON.stringify(all));
+  return true;
+}
+
+export function deleteCodeConfig(id: string): boolean {
+  const all = getAllCodeConfigs();
+  const idx = all.findIndex((c) => c.id === id);
+  if (idx === -1) return false;
+  all.splice(idx, 1);
+  localStorage.setItem(CODE_STORAGE_KEY, JSON.stringify(all));
+  return true;
+}
+
+export function getActiveCodeForDepartment(department?: string): CodeConfig | null {
+  const all = getAllCodeConfigs();
+  const now = new Date();
+  if (department) {
+    const deptCode = all.find((c) =>
+      c.isActive && c.codeType === "departmental" && c.department === department &&
+      new Date(c.validFrom) <= now && (!c.validUntil || new Date(c.validUntil) >= now)
+    );
+    if (deptCode && (!deptCode.maxUsages || deptCode.currentUsages < deptCode.maxUsages)) return deptCode;
+  }
+  const initialCode = all.find((c) =>
+    c.isActive && c.codeType === "initial" &&
+    new Date(c.validFrom) <= now && (!c.validUntil || new Date(c.validUntil) >= now)
+  );
+  if (initialCode && (!initialCode.maxUsages || initialCode.currentUsages < initialCode.maxUsages)) return initialCode;
+  return null;
+}
+
+export function incrementCodeUsage(codeId: string): boolean {
+  const all = getAllCodeConfigs();
+  const code = all.find((c) => c.id === codeId);
+  if (!code) return false;
+  code.currentUsages++;
+  localStorage.setItem(CODE_STORAGE_KEY, JSON.stringify(all));
+  return true;
+}
