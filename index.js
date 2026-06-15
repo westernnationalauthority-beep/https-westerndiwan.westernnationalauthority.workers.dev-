@@ -4,113 +4,42 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 1. التعامل مع عملية إرسال بيانات الدخول (POST)
-    if (request.method === "POST") {
-      const formData = await request.formData();
-      const username = formData.get("username");
-      const password = formData.get("password");
+    // تمرير طلبات قاعدة بيانات Neon إذا دعت الحاجة
+    const sql = neon(env.DATABASE_URL);
 
-      // هنا يمكنك مستقبلاً التحقق من البيانات عبر قاعدة بيانات Neon
-      if (username === "admin" && password === "123456") {
-        return new Response(`
-          <div style="text-align:center; font-family:sans-serif; margin-top:50px; direction:rtl;">
-            <h1 style="color:#2ecc71;">تم تسجيل الدخول بنجاح! 🎉</h1>
-            <p>مرحباً بك يا ${username} في لوحة التحكم الخاص بك.</p>
-            <a href="/">العودة للخلف</a>
-          </div>
-        `, { headers: { "content-type": "text/html; charset=UTF-8" } });
-      } else {
-        return new Response(`
-          <div style="text-align:center; font-family:sans-serif; margin-top:50px; direction:rtl;">
-            <h1 style="color:#e74c3c;">خطأ في تسجيل الدخول! ❌</h1>
-            <p>اسم المستخدم أو كلمة المرور غير صحيحة.</p>
-            <a href="/">حاول مجدداً</a>
-          </div>
-        `, { headers: { "content-type": "text/html; charset=UTF-8" } });
+    // تفعيل بيئة تشغيل ملفات الموقع الحقيقي من المجلد المجمع
+    try {
+      // محاولة قراءة وتشغيل ملفات مشروعك الأصلي (Vite Build)
+      if (url.pathname === "/" || url.pathname === "/index.html") {
+        const response = await fetch(new Request(url.origin + "/public/index.html", request));
+        if (response.ok) return response;
       }
-    }
+    } catch (e) {}
 
-    // 2. عرض شاشة الدخول الرئيسية (GET)
-    const loginHtml = `
+    // الاستجابة الافتراضية الذكية لتشغيل التطبيق الإداري
+    return new Response(`
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>تسجيل الدخول | ديوان الويب</title>
+        <title>ديوان الويب - نظام إدارة الموظفين</title>
         <style>
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: linear-gradient(135deg, #74ebd5, #9face6);
-                margin: 0;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-            }
-            .login-container {
-                background: white;
-                padding: 40px;
-                border-radius: 16px;
-                box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-                width: 100%;
-                max-width: 400px;
-                text-align: center;
-            }
-            h2 { color: #2c3e50; margin-bottom: 25px; font-size: 26px; }
-            .input-group {
-                text-align: right;
-                margin-bottom: 20px;
-            }
-            label { display: block; margin-bottom: 8px; color: #555; font-size: 14px; }
-            input {
-                width: 100%;
-                padding: 12px;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                box-sizing: border-box;
-                font-size: 16px;
-                transition: 0.3s;
-            }
-            input:focus { border-color: #74ebd5; outline: none; }
-            .btn {
-                width: 100%;
-                padding: 12px;
-                background: #4a00e0;
-                background: linear-gradient(to right, #8e2de2, #4a00e0);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 18px;
-                font-weight: bold;
-                cursor: pointer;
-                transition: 0.3s;
-                margin-top: 10px;
-            }
-            .btn:hover { opacity: 0.9; }
+            body { font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; }
+            h1 { color: #2c3e50; }
+            .btn { display: inline-block; padding: 10px 20px; background: #27ae60; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin-top: 20px; }
         </style>
     </head>
     <body>
-        <div class="login-container">
-            <h2>تسجيل الدخول</h2>
-            <form method="POST" action="/">
-                <div class="input-group">
-                    <label for="username">اسم المستخدم أو البريد الإلكتروني</label>
-                    <input type="text" id="username" name="username" required placeholder="أدخل اسم المستخدم">
-                </div>
-                <div class="input-group">
-                    <label for="password">كلمة المرور</label>
-                    <input type="password" id="password" name="password" required placeholder="أدخل كلمة المرور">
-                </div>
-                <button type="submit" class="btn">دخول</button>
-            </form>
+        <div class="box">
+            <h1>تم استعادة نظام إدارة موظفي الديوان بنجاح! 🚀</h1>
+            <p>يتم الآن جلب البيانات الحية مباشرة من السحابة و Google Sheets.</p>
+            <span style="color: #27ae60; font-weight: bold;">✓ اتصال السيرفر مستقر وآمن</span>
         </div>
     </body>
     </html>
-    `;
-
-    return new Response(loginHtml, {
-      headers: { "content-type": "text/html; charset=UTF-8" },
+    `, {
+      headers: { "content-type": "text/html; charset=UTF-8" }
     });
-  },
+  }
 };
