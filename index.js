@@ -1,23 +1,28 @@
-require('dotenv').config();
-const express = require('express');
-const { neon } = require('@neondatabase/serverless');
+import { neon } from '@neondatabase/serverless';
 
-const app = express();
-const PORT = process.env.PORT || 4242;
+export default {
+  async fetch(request, env, ctx) {
+    // جلب رابط قاعدة البيانات من متغيرات البيئة في كلادوفلير
+    const sql = neon(env.DATABASE_URL);
 
-const sql = neon(process.env.DATABASE_URL);
+    // التحقق من المسار الرئيسي
+    const url = new URL(request.url);
+    if (url.pathname === "/") {
+      try {
+        const [result] = await sql`SELECT version()`;
+        const version = result?.version || 'No version found';
+        
+        return new Response(JSON.stringify({ version }), {
+          headers: { "content-type": "application/json" },
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: 'Failed to connect to the database.' }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
 
-app.get('/', async (req, res) => {
-  try {
-    const [result] = await sql`SELECT version()`;
-    const version = result?.version || 'No version found';
-    res.json({ version });
-  } catch (error) {
-    console.error('Database query failed:', error);
-    res.status(500).json({ error: 'Failed to connect to the database.' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Listening to http://localhost:${PORT}`);
-});
+    return new Response("Not Found", { status: 404 });
+  },
+};
